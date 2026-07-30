@@ -1,0 +1,162 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Suite, leak gate, four negative builds and the demo (Free Pascal, Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      # The dependency is a submodule pinned to an exact commit, so what CI
+      # builds against is what this repository's history records — not whatever
+      # that project's main branch happens to be today.
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Install Free Pascal
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fpc
+          fpc -iV
+
+      # Every service and the dispatcher run at once, so a single core would
+      # hide interleavings rather than exercise them. Printed so a surprising
+      # result on a future runner has an explanation.
+      - name: Cores available
+        run: nproc
+
+      - name: Confirm the submodule is present
+        run: |
+          test -f vendor/delphi-concurrent-pool/src/ConcurrentPool.Worker.pas
+          git submodule status
+
+      # -Sa turns assertions on. Without it the pool's internal guards compile
+      # out and part of the suite proves nothing.
+      - name: Build the suite
+        run: |
+          mkdir -p build/normal
+          fpc -Mdelphi -Sa -Fusrc -Futests \
+            -Fuvendor/delphi-concurrent-pool/src \
+            -FUbuild/normal -obuild/Tests tests/Tests.dpr
+
+      - name: Run the suite
+        run: timeout 240 ./build/Tests
+
+      # heaptrc reports leaks on stdout but leaves the exit code at 0 (measured),
+      # so the grep is mandatory rather than stylistic. It is ANCHORED because an
+      # unanchored '0 unfreed memory blocks' also matches '10 unfreed'.
+      - name: Leak gate
+        run: |
+          mkdir -p build/heap
+          fpc -Mdelphi -Sa -gh -gl -Fusrc -Futests \
+            -Fuvendor/delphi-concurrent-pool/src \
+            -FUbuild/heap -obuild/TestsHeap tests/Tests.dpr
+          set +e
+          timeout 300 ./build/TestsHeap > heap.log 2>&1
+          code=$?
+          set -e
+          tail -20 heap.log
+          if [ "$code" -ne 0 ]; then
+            echo "::error::the suite failed under heaptrc (exit $code)"
+            exit 1
+          fi
+          if ! grep -qE '^0 unfreed memory blocks' heap.log; then
+            echo "::error::heaptrc reported unfreed memory"
+            grep -E 'unfreed memory blocks' heap.log || true
+            exit 1
+          fi
+          echo "no leaks"
+
+      # Each negative build removes exactly ONE safety property and MUST fail.
+      # A separate -FU directory per build is not optional: Free Pascal does not
+      # treat a changed -d define as a reason to recompile, so sharing a unit
+      # output directory silently reuses the protected units and makes the whole
+      # check meaningless.
+      - name: Negative build — PROVE_SYNC_PUBLISH (queued delivery)
+        run: |
+          mkdir -p build/n1
+          fpc -Mdelphi -Sa -dPROVE_SYNC_PUBLISH -Fusrc -Futests \
+            -Fuvendor/delphi-concurrent-pool/src -FUbuild/n1 -obuild/n1/T tests/Tests.dpr
+          if timeout 240 ./build/n1/T; then
+            echo "::error::the suite passed with delivery moved onto the publisher's thread"
+            exit 1
+          fi
+          echo "correct: fails when publishing stops being free"
+
+      - name: Negative build — PROVE_NO_AFFINITY (main-thread lane)
+        run: |
+          mkdir -p build/n2
+          fpc -Mdelphi -Sa -dPROVE_NO_AFFINITY -Fusrc -Futests \
+            -Fuvendor/delphi-concurrent-pool/src -FUbuild/n2 -obuild/n2/T tests/Tests.dpr
+          if timeout 240 ./build/n2/T; then
+            echo "::error::the suite passed with thread affinity removed"
+            exit 1
+          fi
+          echo "correct: fails without the main-thread lane"
+
+      - name: Negative build — PROVE_NO_DISCARD (stop settles the backlog)
+        run: |
+          mkdir -p build/n3
+          fpc -Mdelphi -Sa -dPROVE_NO_DISCARD -Fusrc -Futests \
+            -Fuvendor/delphi-concurrent-pool/src -FUbuild/n3 -obuild/n3/T tests/Tests.dpr
+          if timeout 240 ./build/n3/T; then
+            echo "::error::the suite passed with the post-stop discard removed"
+            exit 1
+          fi
+          echo "correct: fails when a stopped service is still heard from"
+
+      # This one is different, and the difference is the point. Removing the
+      # protection breaks no assertion — every test still passes and the process
+      # still exits 0. What it breaks is ownership of a refused registration, and
+      # only the leak gate can see that. So this step asserts the opposite of the
+      # others: the run must SUCCEED and heaptrc must report unfreed memory.
+      - name: Negative build — PROVE_CONST_REGISTER (a refused service is owned)
+        run: |
+          mkdir -p build/n4
+          fpc -Mdelphi -Sa -gh -gl -dPROVE_CONST_REGISTER -Fusrc -Futests \
+            -Fuvendor/delphi-concurrent-pool/src -FUbuild/n4 -obuild/n4/T tests/Tests.dpr
+          set +e
+          timeout 300 ./build/n4/T > n4.log 2>&1
+          code=$?
+          set -e
+          grep -E 'unfreed memory blocks|passed,' n4.log || true
+          if grep -qE '^0 unfreed memory blocks' n4.log; then
+            echo "::error::nothing leaked with the const restored — the leak gate proves nothing"
+            exit 1
+          fi
+          echo "correct: a refused registration leaks when the parameter takes no reference"
+
+      # The watchdog is what turns a deadlock into a named failure instead of a
+      # dead runner, so it is verified rather than assumed. A limit of zero arms
+      # it immediately; it must halt with exit 2 and name a test.
+      - name: The watchdog itself halts and names the test
+        run: |
+          set +e
+          timeout 120 ./build/Tests --watchdog=0 > wd.log 2>&1
+          code=$?
+          set -e
+          grep -A1 'WATCHDOG' wd.log || true
+          if [ "$code" -ne 2 ]; then
+            echo "::error::expected exit 2 from the watchdog, got $code"
+            exit 1
+          fi
+          grep -q 'WATCHDOG: test "' wd.log || {
+            echo "::error::the watchdog did not name the test it halted on"
+            exit 1
+          }
+          echo "correct: the watchdog halts and names the test"
+
+      # The demo is not decoration: it stops a service mid-flight and exits
+      # non-zero if anything of that service is heard from afterwards.
+      - name: Build and run the demo
+        run: |
+          mkdir -p build/demo
+          fpc -Mdelphi -Sa -Fusrc -Fuvendor/delphi-concurrent-pool/src \
+            -FUbuild/demo -obuild/demo/Newsroom demo/Newsroom.dpr
+          timeout 120 ./build/demo/Newsroom

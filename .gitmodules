@@ -1,0 +1,3 @@
+[submodule "vendor/delphi-concurrent-pool"]
+	path = vendor/delphi-concurrent-pool
+	url = https://github.com/ramonruanxc/delphi-concurrent-pool.git

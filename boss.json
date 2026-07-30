@@ -1,0 +1,11 @@
+{
+  "name": "github.com/ramonruanxc/delphi-service-host",
+  "description": "Long-lived services that each own a thread and only ever talk through an event bus, for Delphi and Free Pascal.",
+  "version": "1.0.0",
+  "homepage": "https://github.com/ramonruanxc/delphi-service-host",
+  "mainsrc": "src",
+  "license": "MIT",
+  "dependencies": {
+    "github.com/ramonruanxc/delphi-concurrent-pool": "^1.0.0"
+  }
+}
