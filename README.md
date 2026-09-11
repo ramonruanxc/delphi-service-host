@@ -21,6 +21,14 @@ wiring lives at the call site, where someone reading it can see the whole graph.
 
 ---
 
+## Execution flow
+
+![Execution flow of delphi-service-host](docs/images/architecture-flow.png)
+
+Each service owns a native thread and publishes through an event bus.
+Background subscribers run on the dispatcher; main-thread subscribers run when
+the application calls DeliverPending.
+
 ## Why this exists
 
 A background service is easy. Six of them, running at once, needing to react to
