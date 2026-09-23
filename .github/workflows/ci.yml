@@ -12,12 +12,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # The dependency is a submodule pinned to an exact commit, so what CI
-      # builds against is what this repository's history records — not whatever
-      # that project's main branch happens to be today.
+      # The dependency is vendored in lib/concurrent-pool (see PROVENANCE.md
+      # there), so a plain checkout is the whole build input — the same thing a
+      # newcomer gets from git clone or the GitHub ZIP.
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
       - name: Install Free Pascal
         run: |
@@ -31,10 +29,10 @@ jobs:
       - name: Cores available
         run: nproc
 
-      - name: Confirm the submodule is present
+      - name: Confirm the vendored pool is present
         run: |
-          test -f vendor/delphi-concurrent-pool/src/ConcurrentPool.Worker.pas
-          git submodule status
+          test -f lib/concurrent-pool/ConcurrentPool.Worker.pas
+          grep -m1 'Source commit' lib/concurrent-pool/PROVENANCE.md
 
       # -Sa turns assertions on. Without it the pool's internal guards compile
       # out and part of the suite proves nothing.
@@ -42,7 +40,7 @@ jobs:
         run: |
           mkdir -p build/normal
           fpc -Mdelphi -Sa -Fusrc -Futests \
-            -Fuvendor/delphi-concurrent-pool/src \
+            -Fulib/concurrent-pool \
             -FUbuild/normal -obuild/Tests tests/Tests.dpr
 
       - name: Run the suite
@@ -55,7 +53,7 @@ jobs:
         run: |
           mkdir -p build/heap
           fpc -Mdelphi -Sa -gh -gl -Fusrc -Futests \
-            -Fuvendor/delphi-concurrent-pool/src \
+            -Fulib/concurrent-pool \
             -FUbuild/heap -obuild/TestsHeap tests/Tests.dpr
           set +e
           timeout 300 ./build/TestsHeap > heap.log 2>&1
@@ -82,7 +80,7 @@ jobs:
         run: |
           mkdir -p build/n1
           fpc -Mdelphi -Sa -dPROVE_SYNC_PUBLISH -Fusrc -Futests \
-            -Fuvendor/delphi-concurrent-pool/src -FUbuild/n1 -obuild/n1/T tests/Tests.dpr
+            -Fulib/concurrent-pool -FUbuild/n1 -obuild/n1/T tests/Tests.dpr
           if timeout 240 ./build/n1/T; then
             echo "::error::the suite passed with delivery moved onto the publisher's thread"
             exit 1
@@ -93,7 +91,7 @@ jobs:
         run: |
           mkdir -p build/n2
           fpc -Mdelphi -Sa -dPROVE_NO_AFFINITY -Fusrc -Futests \
-            -Fuvendor/delphi-concurrent-pool/src -FUbuild/n2 -obuild/n2/T tests/Tests.dpr
+            -Fulib/concurrent-pool -FUbuild/n2 -obuild/n2/T tests/Tests.dpr
           if timeout 240 ./build/n2/T; then
             echo "::error::the suite passed with thread affinity removed"
             exit 1
@@ -104,7 +102,7 @@ jobs:
         run: |
           mkdir -p build/n3
           fpc -Mdelphi -Sa -dPROVE_NO_DISCARD -Fusrc -Futests \
-            -Fuvendor/delphi-concurrent-pool/src -FUbuild/n3 -obuild/n3/T tests/Tests.dpr
+            -Fulib/concurrent-pool -FUbuild/n3 -obuild/n3/T tests/Tests.dpr
           if timeout 240 ./build/n3/T; then
             echo "::error::the suite passed with the post-stop discard removed"
             exit 1
@@ -120,7 +118,7 @@ jobs:
         run: |
           mkdir -p build/n4
           fpc -Mdelphi -Sa -gh -gl -dPROVE_CONST_REGISTER -Fusrc -Futests \
-            -Fuvendor/delphi-concurrent-pool/src -FUbuild/n4 -obuild/n4/T tests/Tests.dpr
+            -Fulib/concurrent-pool -FUbuild/n4 -obuild/n4/T tests/Tests.dpr
           set +e
           timeout 300 ./build/n4/T > n4.log 2>&1
           code=$?
@@ -157,6 +155,6 @@ jobs:
       - name: Build and run the demo
         run: |
           mkdir -p build/demo
-          fpc -Mdelphi -Sa -Fusrc -Fuvendor/delphi-concurrent-pool/src \
+          fpc -Mdelphi -Sa -Fusrc -Fulib/concurrent-pool \
             -FUbuild/demo -obuild/demo/Newsroom demo/Newsroom.dpr
           timeout 120 ./build/demo/Newsroom

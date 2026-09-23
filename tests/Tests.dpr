@@ -2,7 +2,7 @@
   ServiceHost test runner.
 
     Free Pascal   fpc -Mdelphi -Sa -Fusrc -Futests \
-                    -Fuvendor/delphi-concurrent-pool/src \
+                    -Fulib/concurrent-pool \
                     -FUbuild/normal -obuild/Tests tests/Tests.dpr
     Delphi        open in the IDE and build; the uses clause carries every path
 
@@ -23,12 +23,13 @@ uses
   cthreads,
   {$IFEND}
   {$IFDEF FPC}SysUtils{$ELSE}System.SysUtils{$ENDIF},
-  { The dependency, pinned as a submodule so the exact commit is part of this
-    repository's history rather than "whatever main happened to be". }
-  ConcurrentPool.Types in '../vendor/delphi-concurrent-pool/src/ConcurrentPool.Types.pas',
-  ConcurrentPool.Atomic in '../vendor/delphi-concurrent-pool/src/ConcurrentPool.Atomic.pas',
-  ConcurrentPool.Queue in '../vendor/delphi-concurrent-pool/src/ConcurrentPool.Queue.pas',
-  ConcurrentPool.Worker in '../vendor/delphi-concurrent-pool/src/ConcurrentPool.Worker.pas',
+  { The dependency, vendored at an exact commit (lib/concurrent-pool/
+    PROVENANCE.md) so it is part of this repository's history rather than
+    "whatever main happened to be". }
+  ConcurrentPool.Types in '../lib/concurrent-pool/ConcurrentPool.Types.pas',
+  ConcurrentPool.Atomic in '../lib/concurrent-pool/ConcurrentPool.Atomic.pas',
+  ConcurrentPool.Queue in '../lib/concurrent-pool/ConcurrentPool.Queue.pas',
+  ConcurrentPool.Worker in '../lib/concurrent-pool/ConcurrentPool.Worker.pas',
   ServiceHost.Events in '../src/ServiceHost.Events.pas',
   ServiceHost.Bus in '../src/ServiceHost.Bus.pas',
   ServiceHost.Service in '../src/ServiceHost.Service.pas',

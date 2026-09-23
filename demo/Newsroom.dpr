@@ -1,4 +1,4 @@
-{
+﻿{
   Three services running at once, each on its own thread, none of them holding a
   reference to any other. Everything they know about each other, they learned
   from an event.
@@ -16,7 +16,7 @@
   archivist's tally shows that nothing of the poller arrived afterwards.
 
   Build (Free Pascal):
-    fpc -Mdelphi -Fusrc -Fuvendor/delphi-concurrent-pool/src \
+    fpc -Mdelphi -Fusrc -Fulib/concurrent-pool \
       -FUbuild/demo -obuild/Newsroom demo/Newsroom.dpr
 
   Build (Delphi): open in the IDE and build.
@@ -36,10 +36,10 @@ uses
   {$IFEND}
   {$IFDEF FPC}SysUtils, Classes, SyncObjs{$ELSE}System.SysUtils, System.Classes,
     System.SyncObjs{$ENDIF},
-  ConcurrentPool.Types in '../vendor/delphi-concurrent-pool/src/ConcurrentPool.Types.pas',
-  ConcurrentPool.Atomic in '../vendor/delphi-concurrent-pool/src/ConcurrentPool.Atomic.pas',
-  ConcurrentPool.Queue in '../vendor/delphi-concurrent-pool/src/ConcurrentPool.Queue.pas',
-  ConcurrentPool.Worker in '../vendor/delphi-concurrent-pool/src/ConcurrentPool.Worker.pas',
+  ConcurrentPool.Types in '../lib/concurrent-pool/ConcurrentPool.Types.pas',
+  ConcurrentPool.Atomic in '../lib/concurrent-pool/ConcurrentPool.Atomic.pas',
+  ConcurrentPool.Queue in '../lib/concurrent-pool/ConcurrentPool.Queue.pas',
+  ConcurrentPool.Worker in '../lib/concurrent-pool/ConcurrentPool.Worker.pas',
   ServiceHost.Events in '../src/ServiceHost.Events.pas',
   ServiceHost.Bus in '../src/ServiceHost.Bus.pas',
   ServiceHost.Service in '../src/ServiceHost.Service.pas',
