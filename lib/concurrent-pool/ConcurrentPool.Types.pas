@@ -133,12 +133,24 @@ begin
   Result := TMethodRunnable.Create(AMethod);
 end;
 
+{$IF NOT DEFINED(FPC) AND DEFINED(MSWINDOWS)}
+{ LOCAL PATCH (delphi-service-host, see PROVENANCE.md): TThread.GetTickCount64
+  is not in Delphi XE7's RTL. kernel32 has exported the same monotonic clock
+  since Windows Vista, and declaring it here still needs no platform unit. }
+function Kernel32GetTickCount64: UInt64; stdcall;
+  external 'kernel32.dll' name 'GetTickCount64';
+{$IFEND}
+
 function Ticks: UInt64;
 begin
   {$IFDEF FPC}
   Result := SysUtils.GetTickCount64;
   {$ELSE}
+    {$IFDEF MSWINDOWS}
+  Result := Kernel32GetTickCount64;
+    {$ELSE}
   Result := TThread.GetTickCount64;
+    {$ENDIF}
   {$ENDIF}
 end;
 

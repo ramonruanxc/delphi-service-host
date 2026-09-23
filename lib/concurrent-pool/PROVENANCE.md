@@ -26,8 +26,17 @@ has absorbed), and update this file.
 | `LICENSE` | `LICENSE` |
 
 `ConcurrentPool.Pool.pas` is not used by this repository and is not copied.
-Every copied file is byte-identical to upstream.
+`ConcurrentPool.Queue.pas` and `ConcurrentPool.Worker.pas` are byte-identical to
+upstream.
 
 ## Local patches
 
-None.
+Both are Delphi-only. The Free Pascal code paths are unchanged.
+
+1. `ConcurrentPool.Types.pas` — `Ticks` no longer calls `TThread.GetTickCount64`
+   on Delphi for Windows, because that method is not in Delphi XE7's RTL. It
+   calls kernel32's `GetTickCount64` directly (the same monotonic clock, present
+   since Windows Vista). Non-Windows Delphi targets keep the upstream call.
+2. `ConcurrentPool.Atomic.pas` — saved as UTF-8 **with BOM**. One assertion
+   message contains a non-ASCII character, and without a BOM Delphi reads the
+   file in the system ANSI code page.

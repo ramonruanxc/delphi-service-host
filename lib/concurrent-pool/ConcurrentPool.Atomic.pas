@@ -1,4 +1,4 @@
-{
+﻿{
   ConcurrentPool — a 32-bit interlocked counter.
 
   This is deliberately a record and not a class, because the two ways a record
