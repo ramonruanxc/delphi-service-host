@@ -2,7 +2,46 @@
 
 Long-lived services that each own a thread and only ever talk to each other
 through an event bus. Delphi and Free Pascal, no dependencies beyond the RTL and
-[delphi-concurrent-pool](https://github.com/ramonruanxc/delphi-concurrent-pool).
+[delphi-concurrent-pool](https://github.com/ramonruanxc/delphi-concurrent-pool),
+which is vendored in [`lib/concurrent-pool`](lib/concurrent-pool/PROVENANCE.md).
+
+## Quick start
+
+```sh
+git clone https://github.com/ramonruanxc/delphi-service-host
+```
+
+(or download the ZIP from GitHub — nothing else to fetch). No project options,
+search paths, defines or package manager.
+
+**Delphi XE7 or later:** open `demo/Newsroom.dpr` and press **F9**. The console
+stays open until you press Enter when run under the debugger.
+
+**Free Pascal 3.2.2**, from the repository root:
+
+```sh
+fpc demo/Newsroom.dpr
+./demo/Newsroom        # demo\Newsroom.exe on Windows
+```
+
+It runs for about three seconds and ends with:
+
+```
+  events from the poller after Stop returned: 0
+  ...
+  published 21, delivered 34, dropped 0
+
+Newsroom: OK
+```
+
+Exit code 0 on `Newsroom: OK`, 1 on `Newsroom: FAILED`. The event counts vary a
+little from run to run; the `0` and the `OK` do not.
+
+**Compiler status.** Free Pascal 3.2.2 is verified by CI on every push,
+including the quick start command above exactly as written. Delphi XE7 and later
+is the intended target and the code is written for it, but no Delphi build is
+executed by CI or was executed for this layout — treat Delphi as unverified
+until you have pressed F9 yourself.
 
 ```pascal
 Host := TServiceHost.Create;
@@ -89,15 +128,11 @@ With [boss](https://github.com/HashLoad/boss):
 boss install github.com/ramonruanxc/delphi-service-host
 ```
 
-By hand: add `src/` to your search path, and `src/` of delphi-concurrent-pool
-alongside it. This repository pins that dependency as a submodule, so
-
-```sh
-git clone --recurse-submodules https://github.com/ramonruanxc/delphi-service-host
-```
-
-gets you the exact commit CI builds against, rather than whatever that project's
-main branch happens to be today.
+By hand: add `src/` and `lib/concurrent-pool/` to your search path. The pool is
+a verbatim copy of an exact upstream commit, plus two small Delphi XE7 patches —
+[`PROVENANCE.md`](lib/concurrent-pool/PROVENANCE.md) records which commit and
+which patches — so what you build is what CI builds, not whatever that
+project's main branch happens to be today.
 
 ## Writing a service
 
@@ -190,11 +225,8 @@ nobody did, it leaked. There was no third option, only a convention.
 
 ## Running the demo
 
-```sh
-fpc -Mdelphi -Fusrc -Fuvendor/delphi-concurrent-pool/src \
-  -FUbuild/demo -obuild/Newsroom demo/Newsroom.dpr
-./build/Newsroom
-```
+See [Quick start](#quick-start): open `demo/Newsroom.dpr` in Delphi and press
+F9, or run `fpc demo/Newsroom.dpr` from the repository root.
 
 Three services on three threads plus a non-service subscriber. Partway through,
 the poller is stopped while it still has a backlog in flight, and the demo exits
@@ -214,6 +246,8 @@ non-zero if a single one of those events arrives afterwards.
     ticker     7 events
 
   published 21, delivered 34, dropped 0
+
+Newsroom: OK
 ```
 
 `delivered` exceeds `published` because one event reaches several subscribers.
@@ -223,13 +257,16 @@ cannot keep up drops and says so rather than stalling the service.
 ## Tests
 
 ```sh
-fpc -Mdelphi -Sa -Fusrc -Futests -Fuvendor/delphi-concurrent-pool/src \
+mkdir -p build/normal
+fpc -B -Mdelphi -Sa -Fusrc -Futests -Fulib/concurrent-pool \
   -FUbuild/normal -obuild/Tests tests/Tests.dpr
 ./build/Tests
 ```
 
 59 assertions. `-Sa` matters: without it the pool's internal guards compile out
-and part of the suite proves nothing.
+and part of the suite proves nothing. `-B` matters locally for the same reason:
+the quick start leaves `.ppu` files built without `-Sa` next to the sources, and
+without `-B` Free Pascal reuses them.
 
 Every test is bounded, and a watchdog thread turns an overrun into a named
 failure and exit 2 rather than a hung run:
