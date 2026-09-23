@@ -17,10 +17,18 @@ __recovery/
 Win32/
 Win64/
 
+# Delphi project files. Opening a .dpr regenerates its .dproj for whichever IDE
+# version opens it; a committed one from a newer IDE is what an older one then
+# chokes on, so none is tracked.
+*.dproj
+*.dproj.local
+*.stat
+
 # Test artefacts
 heap.log
 wd.log
 n4.log
+quickstart.log
 
 # Throwaway probes. What they measured is recorded in
 # docs/specs/2026-07-30-service-host-design.md; the programs themselves were

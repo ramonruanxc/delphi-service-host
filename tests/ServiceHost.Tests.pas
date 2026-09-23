@@ -1,4 +1,4 @@
-{
+﻿{
   ServiceHost — the suite.
 
   What is under test is the COMMUNICATION, because that is the whole point of a

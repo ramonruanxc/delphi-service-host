@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- delphi-concurrent-pool is vendored in `lib/concurrent-pool` (the four units
+  this repository uses, plus its licence) instead of pinned as a git submodule,
+  so a plain `git clone` or GitHub ZIP builds with no further setup. Copied from
+  the same commit the submodule was pinned to, `efef9d6`; `PROVENANCE.md` there
+  records it.
+- `demo/Newsroom.dpr` needs no configuration on either compiler: Delphi resolves
+  every unit through the uses clause, Free Pascal through `{$UNITPATH}`, so
+  `fpc demo/Newsroom.dpr` is the whole build. It ends with `Newsroom: OK` or
+  `Newsroom: FAILED`, and waits for Enter only when run under the Delphi
+  debugger.
+- Sources with non-ASCII string literals are saved as UTF-8 with BOM.
+
+### Fixed
+
+- Delphi XE7: the vendored pool's `Ticks` called `TThread.GetTickCount64`, which
+  XE7's RTL does not have. It now calls kernel32's `GetTickCount64` on Windows.
+  Not yet compiled with Delphi.
+
 ## [1.0.0] — 2026-07-30
 
 First release.
