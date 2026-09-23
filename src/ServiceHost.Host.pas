@@ -15,8 +15,8 @@
 
     1. cancel the token, so the loop stops before its next tick
     2. join the thread, so no further publish is possible from that service
-    3. call DiscardFor, which takes the dispatcher's lock and removes every
-       pending event of that service from both lanes
+    3. call DiscardFor, which retires every pending event of that service on
+       both lanes and waits out a delivery of it already in progress
 
   After step 3 returns there is nothing left of that service anywhere, and the
   claim is total rather than probabilistic — which is what makes it testable.
@@ -365,7 +365,7 @@ begin
     --------------------------------------------------------------------------- }
   {$ELSE}
   { 3. discard — nothing of this service is left pending on either lane }
-  FBus.DiscardFor(AEntry.Service.Name);
+  FBus.DiscardFor(AEntry.Service.Name, ATimeoutMs);
   {$ENDIF}
 end;
 

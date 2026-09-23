@@ -6,6 +6,24 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- A stopped service could still be heard from. `DiscardFor` swept both lanes
+  under the bus lock, but the dispatcher takes events off a lane without that
+  lock, so an event already taken when the sweep ran was delivered after
+  `Stop` returned. Events now carry their source's generation: `DiscardFor`
+  retires the source, the lanes skip retired events under the lock, and
+  `DiscardFor` waits (bounded by the stop timeout) for a delivery of that
+  source already in progress. The discard test now checks the stopped
+  service's own event count instead of repeating `Discarded > 0`.
+- A background subscriber that raised ended the dispatcher thread, silencing
+  every other subscriber. The exception is now caught and counted in
+  `TEventBus.HandlerFaults`.
+- `demo/Newsroom.dpr` started counting "late" poller events before calling
+  `Stop`, so an event delivered while the stop was still in progress was
+  reported as late and the demo printed `Newsroom: FAILED` in about one run
+  in ten.
+
 ### Changed
 
 - delphi-concurrent-pool is vendored in `lib/concurrent-pool` (the four units
@@ -13,6 +31,9 @@ follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so a plain `git clone` or GitHub ZIP builds with no further setup. Copied from
   the same commit the submodule was pinned to, `efef9d6`; `PROVENANCE.md` there
   records it.
+- The vendored pool is re-synced to upstream `a71d2f8`, which absorbed both
+  local patches. No Delphi target calls `TThread.GetTickCount64`, which is not
+  in Delphi XE7's RTL; the copy is now byte-identical to upstream.
 - `demo/Newsroom.dpr` needs no configuration on either compiler: Delphi resolves
   every unit through the uses clause, Free Pascal through `{$UNITPATH}`, so
   `fpc demo/Newsroom.dpr` is the whole build. It ends with `Newsroom: OK` or

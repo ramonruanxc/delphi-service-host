@@ -30,9 +30,11 @@
      publish time whether the source was stopping AND purged the queue on stop.
      Neither is complete on its own and together they still race: an event can
      pass the publish check and be delivered after the stop. Here there is only
-     the purge, done at the point where it can be made total — DiscardFor takes
-     the same lock the dispatcher does, so once it returns, nothing from that
-     service is left to deliver.
+     the purge, done at the point where it can be made total. DiscardFor
+     retires the service's queued events AND waits out the one delivery of it
+     that a lane may already be running; a lane re-checks, under the bus's lock,
+     that an event's source was not retired after the event was queued. Once it
+     returns, nothing from that service is left to deliver.
 }
 unit ServiceHost.Bus;
 
@@ -85,9 +87,22 @@ type
     Coalesce: Boolean;
   end;
 
+  { The delivery a lane is running right now, so DiscardFor can wait it out.
+    Each lane runs one delivery at a time: one dispatcher thread, one caller of
+    DeliverPending. }
+  TBusInFlight = record
+    Active: Boolean;
+    Source: string;
+    Thread: TThreadID;
+  end;
+
   TEventBus = class
   strict private
     FLock: TCriticalSection;
+    { Per-source generation, bumped by DiscardFor; keyed by upper-cased name
+      because sources match case-insensitively. Guarded by FLock. }
+    FGenerations: TDictionary<string, Integer>;
+    FInFlight: array[TThreadAffinity] of TBusInFlight;
     FSubscriptions: TList<TSubscription>;
     FNextId: TSubscriptionId;
 
@@ -102,7 +117,12 @@ type
     FDropped: TAtomicCounter;
     FDiscarded: TAtomicCounter;
     FCoalesced: TAtomicCounter;
+    FHandlerFaults: TAtomicCounter;
 
+    function GenerationOf(const ASource: string): Integer;
+    function CurrentGeneration(const ASource: string): Integer;
+    function Claim(ADelivery: Pointer; ALane: TThreadAffinity): Boolean;
+    procedure Release(ALane: TThreadAffinity);
     function Matches(const ASub: TSubscription;
       const AEvent: TServiceEvent): Boolean;
     function SnapshotSubscriptions: TArray<TSubscription>;
@@ -132,10 +152,14 @@ type
       const AMessage: string; ADatum: Integer = 0;
       APayload: IEventPayload = nil): Boolean;
 
-    { Drops every pending event published by AServiceName, on both lanes. Called
-      by the host when a service stops, so nothing from a stopped service is
-      delivered afterwards. }
-    function DiscardFor(const AServiceName: string): Integer;
+    { Drops every pending event published by AServiceName, on both lanes, and
+      waits for a delivery of it already running on another thread to finish.
+      Called by the host when a service stops, so nothing from a stopped service
+      is delivered afterwards. The wait is bounded by ATimeoutMs: a handler that
+      blocks on the caller (for example on a lock the caller holds) delays the
+      stop instead of deadlocking it. }
+    function DiscardFor(const AServiceName: string;
+      ATimeoutMs: Cardinal = WAIT_INFINITE): Integer;
 
     { Delivers queued main-thread events on the CALLING thread. An application
       calls this from its main thread — Application.OnIdle, or its own loop.
@@ -152,6 +176,9 @@ type
     function Dropped: Integer;
     function Discarded: Integer;
     function Coalesced: Integer;
+    { Background handlers that raised. The dispatcher counts them and carries
+      on, so one faulty subscriber cannot silence every other one. }
+    function HandlerFaults: Integer;
     function PendingBackground: Integer;
     function PendingMainThread: Integer;
     function SubscriptionCount: Integer;
@@ -173,6 +200,8 @@ type
     Event: TServiceEvent;
     Handler: TEventHandler;
     SubId: TSubscriptionId;
+    { The source's generation when queued; stale once DiscardFor bumps it. }
+    Generation: Integer;
   end;
 
   TDispatcherThread = class(TThread)
@@ -198,7 +227,7 @@ begin
 end;
 
 function NewDelivery(const AEvent: TServiceEvent; AHandler: TEventHandler;
-  AId: TSubscriptionId): PPendingDelivery;
+  AId: TSubscriptionId; AGeneration: Integer): PPendingDelivery;
 begin
   New(Result);
   { Initialize before assigning: New does not zero the managed fields, and
@@ -208,6 +237,7 @@ begin
   Result^.Event := AEvent;
   Result^.Handler := AHandler;
   Result^.SubId := AId;
+  Result^.Generation := AGeneration;
 end;
 
 procedure FreeDelivery(APtr: PPendingDelivery);
@@ -231,8 +261,10 @@ begin
   FDropped.Init;
   FDiscarded.Init;
   FCoalesced.Init;
+  FHandlerFaults.Init;
 
   FLock := TCriticalSection.Create;
+  FGenerations := TDictionary<string, Integer>.Create;
   FSubscriptions := TList<TSubscription>.Create;
   FNextId := 1;
 
@@ -274,6 +306,7 @@ begin
   FBackgroundQueue.Free;
   FMainThreadQueue.Free;
   FSubscriptions.Free;
+  FGenerations.Free;
   FLock.Free;
   inherited Destroy;
 end;
@@ -363,6 +396,7 @@ var
   Delivery: PPendingDelivery;
   Queue: TBoundedQueue<Pointer>;
   AnyDropped: Boolean;
+  Generation: Integer;
 begin
   if Stopping then
     Exit(False);
@@ -376,6 +410,7 @@ begin
     handler is never invoked with the bus's lock held and Subscribe is never
     blocked by a slow delivery. }
   Subs := SnapshotSubscriptions;
+  Generation := CurrentGeneration(ASource);
   AnyDropped := False;
 
   {$IFDEF PROVE_SYNC_PUBLISH}
@@ -412,7 +447,7 @@ begin
       Queue := FBackgroundQueue;
     {$ENDIF}
 
-    Delivery := NewDelivery(AEvent, Subs[I].Handler, Subs[I].Id);
+    Delivery := NewDelivery(AEvent, Subs[I].Handler, Subs[I].Id, Generation);
     { Timeout 0: publishing never waits. A full lane drops, and the drop is
       counted rather than silent. }
     if Queue.Push(Delivery, 0) <> qwOK then
@@ -431,24 +466,33 @@ procedure TEventBus.DispatchOne;
 var
   Ptr: Pointer;
   Delivery: PPendingDelivery;
+  Claimed: Boolean;
 begin
   { A bounded wait, so Terminate is noticed even with nothing arriving. }
   if FBackgroundQueue.Pop(Ptr, 50) <> qwOK then
     Exit;
 
   Delivery := PPendingDelivery(Ptr);
+  Claimed := False;
   try
-    { The handler runs with no lock held. A subscriber may publish, subscribe or
-      unsubscribe from inside its own handler without deadlocking, which is the
-      whole reason the subscriber list was snapshotted rather than held. }
-    if Assigned(Delivery^.Handler) then
-      Delivery^.Handler(Delivery^.Event);
-    FDelivered.Increment;
+    Claimed := Claim(Delivery, saBackground);
+    if Claimed then
+    try
+      { The handler runs with no lock held. A subscriber may publish, subscribe
+        or unsubscribe from inside its own handler without deadlocking, which is
+        the whole reason the subscriber list was snapshotted rather than held. }
+      if Assigned(Delivery^.Handler) then
+        Delivery^.Handler(Delivery^.Event);
+      FDelivered.Increment;
+    except
+      { A subscriber that throws must not take the dispatcher — and therefore
+        every other subscriber — down with it. Counted, not rethrown. }
+      FHandlerFaults.Increment;
+    end;
   finally
-    { Released whatever the handler did, including raising. A subscriber that
-      throws must not take the dispatcher — and therefore every other
-      subscriber — down with it. }
     FreeDelivery(Delivery);
+    if Claimed then
+      Release(saBackground);
   end;
 end;
 
@@ -456,6 +500,7 @@ function TEventBus.DeliverPending(AMax: Integer): Integer;
 var
   Ptr: Pointer;
   Delivery: PPendingDelivery;
+  Claimed: Boolean;
 begin
   Result := 0;
   while Result < AMax do
@@ -463,23 +508,35 @@ begin
     if FMainThreadQueue.Pop(Ptr, 0) <> qwOK then
       Break;
     Delivery := PPendingDelivery(Ptr);
+    Claimed := False;
     try
-      if Assigned(Delivery^.Handler) then
-        Delivery^.Handler(Delivery^.Event);
-      FDelivered.Increment;
-      Inc(Result);
+      Claimed := Claim(Delivery, saMainThread);
+      if Claimed then
+      begin
+        if Assigned(Delivery^.Handler) then
+          Delivery^.Handler(Delivery^.Event);
+        FDelivered.Increment;
+        Inc(Result);
+      end;
     finally
       FreeDelivery(Delivery);
+      if Claimed then
+        Release(saMainThread);
     end;
   end;
 end;
 
-function TEventBus.DiscardFor(const AServiceName: string): Integer;
+function TEventBus.DiscardFor(const AServiceName: string;
+  ATimeoutMs: Cardinal): Integer;
 var
   Kept: TList<Pointer>;
   Ptr: Pointer;
   Delivery: PPendingDelivery;
   Dropped: Integer;
+  Me: TThreadID;
+  Lane: TThreadAffinity;
+  Busy: Boolean;
+  Start: UInt64;
 
   procedure Sweep(AQueue: TBoundedQueue<Pointer>);
   var
@@ -521,6 +578,10 @@ begin
       left anywhere. }
     FLock.Enter;
     try
+      { Retire the source first: an event queued before this point but taken off
+        a lane after the sweep is recognised as stale by Claim and never run. }
+      FGenerations.AddOrSetValue(UpperCase(AServiceName),
+        GenerationOf(AServiceName) + 1);
       Sweep(FBackgroundQueue);
       Sweep(FMainThreadQueue);
     finally
@@ -530,6 +591,27 @@ begin
     Kept.Free;
   end;
 
+  { A lane may have claimed one of this service's events before the retirement.
+    Wait until it finishes, except on the thread running it: a handler that
+    stops its own source would otherwise wait for itself. }
+  Me := TThread.CurrentThread.ThreadID;
+  Start := Ticks;
+  repeat
+    Busy := False;
+    FLock.Enter;
+    try
+      for Lane := Low(TThreadAffinity) to High(TThreadAffinity) do
+        if FInFlight[Lane].Active and (FInFlight[Lane].Thread <> Me) and
+           SameText(FInFlight[Lane].Source, AServiceName) then
+          Busy := True;
+    finally
+      FLock.Leave;
+    end;
+    if not Busy or (Remaining(Start, ATimeoutMs) = 0) then
+      Break;
+    Sleep(1);
+  until False;
+
   if Dropped > 0 then
     FDiscarded.Add(Dropped);
   Result := Dropped;
@@ -538,6 +620,58 @@ begin
   Ptr := nil;
   Delivery := Ptr;
   if Delivery <> nil then ;
+end;
+
+function TEventBus.GenerationOf(const ASource: string): Integer;
+begin
+  { Caller holds FLock. A source never retired is at generation 0. }
+  if not FGenerations.TryGetValue(UpperCase(ASource), Result) then
+    Result := 0;
+end;
+
+function TEventBus.CurrentGeneration(const ASource: string): Integer;
+begin
+  FLock.Enter;
+  try
+    Result := GenerationOf(ASource);
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TEventBus.Claim(ADelivery: Pointer; ALane: TThreadAffinity): Boolean;
+var
+  Delivery: PPendingDelivery;
+begin
+  { Checking the generation and publishing the in-flight marker under one lock
+    is what closes the race with DiscardFor: it either retires the source first
+    (this delivery is stale and never runs) or sees this marker and waits. }
+  Delivery := PPendingDelivery(ADelivery);
+  FLock.Enter;
+  try
+    Result := Delivery^.Generation = GenerationOf(Delivery^.Event.Source);
+    if Result then
+    begin
+      FInFlight[ALane].Active := True;
+      FInFlight[ALane].Source := Delivery^.Event.Source;
+      FInFlight[ALane].Thread := TThread.CurrentThread.ThreadID;
+    end;
+  finally
+    FLock.Leave;
+  end;
+  if not Result then
+    FDiscarded.Increment;
+end;
+
+procedure TEventBus.Release(ALane: TThreadAffinity);
+begin
+  FLock.Enter;
+  try
+    FInFlight[ALane].Active := False;
+    FInFlight[ALane].Source := '';
+  finally
+    FLock.Leave;
+  end;
 end;
 
 function TEventBus.WaitDrained(ATimeoutMs: Cardinal): Boolean;
@@ -574,6 +708,11 @@ end;
 function TEventBus.Discarded: Integer;
 begin
   Result := FDiscarded.Value;
+end;
+
+function TEventBus.HandlerFaults: Integer;
+begin
+  Result := FHandlerFaults.Value;
 end;
 
 function TEventBus.Coalesced: Integer;

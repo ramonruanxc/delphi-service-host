@@ -12,8 +12,9 @@
 
     archivist a plain object that hears everything and tallies it per source
 
-  Then the poller is stopped while it still has a backlog on the wire, and the
-  archivist's tally shows that nothing of the poller arrived afterwards.
+  Then the poller is stopped mid-flight, and the archivist's tally shows that
+  nothing of the poller arrived after Stop returned. (The test suite proves the
+  same guarantee against a real backlog, with a deliberately slow subscriber.)
 
   Needs no project options, search paths or defines on either compiler.
 
@@ -326,9 +327,11 @@ begin
       Stop returns, "stopped" means nothing of it is left anywhere. }
     WriteLn;
     Say('host', 'stopping the poller mid-flight');
-    Archivist.WatchForLateArrivalsFrom('poller');
     if not Host.Stop('poller') then
       Say('host', 'the poller did not stop in time');
+    { Count from the moment Stop returns: an event delivered while the stop
+      was still in progress is on time, not late. }
+    Archivist.WatchForLateArrivalsFrom('poller');
 
     TThread.Sleep(400);
     Late := Archivist.LateArrivals;
