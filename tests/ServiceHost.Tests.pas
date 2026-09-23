@@ -680,10 +680,21 @@ end;
 
 { ================================== 6. stopping discards a service's backlog }
 
+function CountFrom(ARecorder: TRecorder; const ASource: string): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  for I := 0 to ARecorder.Count - 1 do
+    if SameText(ARecorder.EventAt(I).Source, ASource) then
+      Inc(Result);
+end;
+
 procedure TestDiscardOnStop(R: TTestRunner);
 var
   Host: TServiceHost;
   Slow: TRecorder;
+  HeardAtStop: Integer;
 begin
   R.Suite('Host — stopping a service discards its pending events');
 
@@ -704,6 +715,7 @@ begin
 
     R.Begins('stopping the noisy service');
     R.IsTrue('it stops', Host.Stop('burst', BLOCK_MS));
+    HeardAtStop := CountFrom(Slow, 'burst');
 
     { Cancel, join, discard — in that order — so once Stop returns there is
       nothing of that service left anywhere. The original checked at publish
@@ -714,10 +726,12 @@ begin
     Host.Bus.WaitDrained(BLOCK_MS);
     TThread.Sleep(SETTLE_MS);
 
-    { PROVE_NO_DISCARD fails here: without the purge, events published before
-      the stop keep arriving after it. }
+    { The recorder sleeps before recording, so an event the dispatcher had
+      already taken when Stop ran would be recorded after Stop returned. The
+      count must not move. PROVE_NO_DISCARD fails here too: without the purge,
+      events published before the stop keep arriving after it. }
     R.IsTrue('nothing from the stopped service arrives afterwards',
-      Host.Bus.Discarded > 0);
+      CountFrom(Slow, 'burst') = HeardAtStop);
 
     R.IsTrue('the other service is unaffected and still running',
       Host.StateOf('quiet') = svRunning);
@@ -774,6 +788,50 @@ end;
 
 { ==================================================================== entry }
 
+{ ============================ 8. a subscriber that raises }
+
+type
+  TThrower = class
+  public
+    procedure Handle(const AEvent: TServiceEvent);
+  end;
+
+procedure TThrower.Handle(const AEvent: TServiceEvent);
+begin
+  raise Exception.Create('subscriber failure');
+end;
+
+procedure TestRaisingSubscriberKeepsDispatcher(R: TTestRunner);
+var
+  Bus: TEventBus;
+  Thrower: TThrower;
+  Heard: TRecorder;
+begin
+  R.Suite('Bus — a subscriber that raises does not stop the dispatcher');
+
+  Bus := TEventBus.Create;
+  Thrower := TThrower.Create;
+  Heard := TRecorder.Create;
+  try
+    Bus.Subscribe(Thrower.Handle, saBackground);
+    Bus.Subscribe(Heard.Handle, saBackground);
+
+    Bus.Publish('svc', 'first', elInfo, 'one');
+    Bus.WaitDrained(BLOCK_MS);
+    TThread.Sleep(SETTLE_MS);
+    Bus.Publish('svc', 'second', elInfo, 'two');
+    Bus.WaitDrained(BLOCK_MS);
+    TThread.Sleep(SETTLE_MS);
+
+    R.AreEqual('the other subscriber heard both events', 2, Heard.Count);
+    R.AreEqual('both failures were counted', 2, Bus.HandlerFaults);
+  finally
+    Bus.Free;
+    Heard.Free;
+    Thrower.Free;
+  end;
+end;
+
 procedure RunTests(ARunner: TTestRunner);
 begin
   GPayloadsAlive.Init;
@@ -789,6 +847,7 @@ begin
   TestDuplicateNameRejected(ARunner);
   TestDiscardOnStop(ARunner);
   TestServicesTalkToEachOther(ARunner);
+  TestRaisingSubscriberKeepsDispatcher(ARunner);
 end;
 
 end.

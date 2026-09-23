@@ -11,8 +11,8 @@ has absorbed), and update this file.
 | | |
 |---|---|
 | Upstream | https://github.com/ramonruanxc/delphi-concurrent-pool |
-| Source commit | `efef9d6ac9337d9e597feaf454e28474c99658d3` |
-| Previously | the git submodule `vendor/delphi-concurrent-pool`, pinned to that same commit |
+| Source commit | `a71d2f87bf96c3e97e7dd3eb91b022cf322a4b15` (upstream `main` after its Delphi XE7 fixes) |
+| Previously | the git submodule `vendor/delphi-concurrent-pool`, pinned to `efef9d6ac9337d9e597feaf454e28474c99658d3` |
 | Licence | MIT, see `LICENSE` in this directory |
 
 ## Copied files
@@ -26,17 +26,12 @@ has absorbed), and update this file.
 | `LICENSE` | `LICENSE` |
 
 `ConcurrentPool.Pool.pas` is not used by this repository and is not copied.
-`ConcurrentPool.Queue.pas` and `ConcurrentPool.Worker.pas` are byte-identical to
-upstream.
+Every copied file is byte-identical to upstream at the source commit.
 
 ## Local patches
 
-Both are Delphi-only. The Free Pascal code paths are unchanged.
-
-1. `ConcurrentPool.Types.pas` — `Ticks` no longer calls `TThread.GetTickCount64`
-   on Delphi for Windows, because that method is not in Delphi XE7's RTL. It
-   calls kernel32's `GetTickCount64` directly (the same monotonic clock, present
-   since Windows Vista). Non-Windows Delphi targets keep the upstream call.
-2. `ConcurrentPool.Atomic.pas` — saved as UTF-8 **with BOM**. One assertion
-   message contains a non-ASCII character, and without a BOM Delphi reads the
-   file in the system ANSI code page.
+None. The two earlier local patches were absorbed upstream: `Ticks` no longer
+calls `TThread.GetTickCount64` (absent from Delphi XE7's RTL) on any Delphi
+target, using kernel32's `GetTickCount64` on Windows and `TStopwatch`
+elsewhere, and `ConcurrentPool.Atomic.pas` no longer has non-ASCII string
+literals, so it needs no BOM.

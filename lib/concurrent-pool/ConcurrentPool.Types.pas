@@ -89,8 +89,10 @@ type
 function AsRunnable(const AMethod: TRunMethod): IRunnable;
 
 { Monotonic clock. A wall clock is wrong here — NTP and DST can move it
-  backwards mid-wait — so this is GetTickCount64 on both compilers, reached
-  through TThread on Delphi so the core needs no platform unit. }
+  backwards mid-wait — so this is GetTickCount64 on both compilers. On Delphi
+  for Windows it is imported from kernel32 directly rather than reached through
+  TThread.GetTickCount64, which is newer than Delphi XE7; other Delphi targets
+  use TStopwatch, which XE7 has everywhere. }
 function Ticks: UInt64;
 
 { Milliseconds since AStart.
@@ -113,6 +115,22 @@ function Remaining(AStart: UInt64; ATimeoutMs: Cardinal): Cardinal;
 
 implementation
 
+{$IFNDEF FPC}
+  {$IFNDEF MSWINDOWS}
+uses
+  System.Diagnostics;
+  {$ENDIF}
+{$ENDIF}
+
+{$IFNDEF FPC}
+  {$IFDEF MSWINDOWS}
+{ Declared here instead of taken from Winapi.Windows, so the unit still needs no
+  platform unit in its uses clause. Present since Windows Vista. }
+function Win32GetTickCount64: UInt64; stdcall;
+  external 'kernel32.dll' name 'GetTickCount64';
+  {$ENDIF}
+{$ENDIF}
+
 { TMethodRunnable }
 
 constructor TMethodRunnable.Create(const AMethod: TRunMethod);
@@ -133,23 +151,15 @@ begin
   Result := TMethodRunnable.Create(AMethod);
 end;
 
-{$IF NOT DEFINED(FPC) AND DEFINED(MSWINDOWS)}
-{ LOCAL PATCH (delphi-service-host, see PROVENANCE.md): TThread.GetTickCount64
-  is not in Delphi XE7's RTL. kernel32 has exported the same monotonic clock
-  since Windows Vista, and declaring it here still needs no platform unit. }
-function Kernel32GetTickCount64: UInt64; stdcall;
-  external 'kernel32.dll' name 'GetTickCount64';
-{$IFEND}
-
 function Ticks: UInt64;
 begin
   {$IFDEF FPC}
   Result := SysUtils.GetTickCount64;
   {$ELSE}
     {$IFDEF MSWINDOWS}
-  Result := Kernel32GetTickCount64;
+  Result := Win32GetTickCount64;
     {$ELSE}
-  Result := TThread.GetTickCount64;
+  Result := UInt64(TStopwatch.GetTimeStamp div (TStopwatch.Frequency div 1000));
     {$ENDIF}
   {$ENDIF}
 end;
