@@ -1,4 +1,4 @@
-{
+﻿{
   ServiceHost test runner.
 
     Free Pascal   fpc -Mdelphi -Sa -Fusrc -Futests \

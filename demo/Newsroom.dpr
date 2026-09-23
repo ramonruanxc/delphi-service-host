@@ -15,17 +15,24 @@
   Then the poller is stopped while it still has a backlog on the wire, and the
   archivist's tally shows that nothing of the poller arrived afterwards.
 
-  Build (Free Pascal):
-    fpc -Mdelphi -Fusrc -Fulib/concurrent-pool \
-      -FUbuild/demo -obuild/Newsroom demo/Newsroom.dpr
+  Needs no project options, search paths or defines on either compiler.
 
-  Build (Delphi): open in the IDE and build.
+  Delphi (XE7 or later): open this file in the IDE and press F9. The uses
+  clause carries every unit's path, relative to this file.
+
+  Free Pascal, from the repository root:
+    fpc demo/Newsroom.dpr
+  The UNITPATH directives below stand in for -Fu, relative to this file.
+
+  Ends with "Newsroom: OK" and exit code 0, or "Newsroom: FAILED" and 1.
 }
 program Newsroom;
 
 {$IFDEF FPC}
   {$MODE DELPHI}
   {$H+}
+  {$UNITPATH ../src}
+  {$UNITPATH ../lib/concurrent-pool}
 {$ELSE}
   {$APPTYPE CONSOLE}
 {$ENDIF}
@@ -275,13 +282,16 @@ end;
 
 { -------------------------------------------------------------------- main }
 
+{ True when every service started and nothing of the stopped poller was heard
+  from afterwards. }
+function RunNewsroom: Boolean;
 var
   Host: TServiceHost;
   Watchdog: TWatchdogService;
   Archivist: TArchivist;
   Late: Integer;
-
 begin
+  Result := False;
   GStarted := Now;
   Host := TServiceHost.Create;
   Archivist := TArchivist.Create;
@@ -305,7 +315,6 @@ begin
     if not Host.WaitRunning(['poller', 'watchdog', 'ticker'], 2000) then
     begin
       WriteLn('services did not start');
-      ExitCode := 1;
       Exit;
     end;
     Say('host', 'all running');
@@ -341,10 +350,44 @@ begin
     begin
       WriteLn;
       WriteLn('  a stopped service was still being heard from — that is a bug');
-      ExitCode := 1;
     end;
+    Result := Late = 0;
   finally
     Host.Free;
     Archivist.Free;
   end;
+end;
+
+var
+  Passed: Boolean;
+
+begin
+  try
+    Passed := RunNewsroom;
+  except
+    on E: Exception do
+    begin
+      WriteLn(E.ClassName, ': ', E.Message);
+      Passed := False;
+    end;
+  end;
+
+  WriteLn;
+  if Passed then
+    WriteLn('Newsroom: OK')
+  else
+  begin
+    WriteLn('Newsroom: FAILED');
+    ExitCode := 1;
+  end;
+
+  { Only under the Delphi debugger (F9), so the console window stays open long
+    enough to read. A plain run, a script or CI never waits here. }
+  {$IFNDEF FPC}
+  if DebugHook <> 0 then
+  begin
+    Write('Press Enter to exit...');
+    ReadLn;
+  end;
+  {$ENDIF}
 end.

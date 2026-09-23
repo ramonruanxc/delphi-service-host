@@ -158,3 +158,12 @@ jobs:
           fpc -Mdelphi -Sa -Fusrc -Fulib/concurrent-pool \
             -FUbuild/demo -obuild/demo/Newsroom demo/Newsroom.dpr
           timeout 120 ./build/demo/Newsroom
+
+      # The README's quick start, verbatim: no -Fu, no -M, no output directory.
+      # The .dpr carries its own unit paths, so this is the command a newcomer
+      # runs from a fresh clone. Last, because it leaves .ppu files in src/.
+      - name: Quick start command, exactly as documented
+        run: |
+          fpc demo/Newsroom.dpr
+          timeout 120 ./demo/Newsroom | tee quickstart.log
+          grep -qx 'Newsroom: OK' quickstart.log
